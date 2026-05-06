@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { appointments, benefits, pets, salon, services, timeSlots } from "./data";
 
 const navItems = [
@@ -35,7 +35,7 @@ function Button({ children, variant = "primary", className = "", ...props }) {
       : "bg-cocoa text-white hover:bg-orange-950";
 
   return (
-    <button className={`rounded-full px-5 py-3 text-sm font-semibold transition ${styles} ${className}`} {...props}>
+    <button className={`rounded-full px-5 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${styles} ${className}`} {...props}>
       {children}
     </button>
   );
@@ -282,6 +282,7 @@ function ServicesPage() {
 function BookingPage() {
   const [step, setStep] = useState(0);
   const [contactError, setContactError] = useState("");
+  const [isConfirming, setIsConfirming] = useState(false);
   const [booking, setBooking] = useState({
     serviceId: services[0].id,
     petName: pets[0].name,
@@ -309,7 +310,10 @@ function BookingPage() {
     }
     setStep((value) => Math.min(steps.length - 1, value + 1));
   };
-  const confirm = () => routeTo("appointments");
+  const confirm = () => {
+    setIsConfirming(true);
+    setTimeout(() => routeTo("appointments"), 1200);
+  };
 
   return (
     <PageTitle title="Онлайн-запись" subtitle="Пошаговый wizard показывает будущую структуру бронирования без бэкенда.">
@@ -374,9 +378,14 @@ function BookingPage() {
             </div>
           )}
           {step === 4 && <BookingSummary booking={booking} />}
+          {isConfirming && (
+            <div className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-4 font-semibold text-cocoa">
+              Подтверждаем запись...
+            </div>
+          )}
           <div className="mt-6 flex justify-between gap-3">
-            <Button variant="secondary" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}>Назад</Button>
-            {step < steps.length - 1 ? <Button onClick={goNext}>Дальше</Button> : <Button onClick={confirm}>Подтвердить запись</Button>}
+            <Button variant="secondary" disabled={step === 0 || isConfirming} onClick={() => setStep((value) => Math.max(0, value - 1))}>Назад</Button>
+            {step < steps.length - 1 ? <Button disabled={isConfirming} onClick={goNext}>Дальше</Button> : <Button disabled={isConfirming} onClick={confirm}>{isConfirming ? "Подтверждаем..." : "Подтвердить запись"}</Button>}
           </div>
         </Card>
         <BookingSummary booking={booking} />
@@ -429,21 +438,34 @@ function AccountPage() {
 
 function AppointmentsPage() {
   const [modal, setModal] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
   const currentAppointments = appointments.filter((item) => currentAppointmentStatuses.includes(item.status));
+
+  useEffect(() => {
+    const timer = setTimeout(() => setIsLoading(false), 1000);
+    return () => clearTimeout(timer);
+  }, []);
 
   return (
     <PageTitle title="Мои записи" subtitle="Текущие записи и быстрые действия по ним.">
       <div className="grid gap-4">
-        {currentAppointments.map((item) => (
-          <Card key={item.id}>
-            <AppointmentCard item={item} compact />
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button variant="secondary" onClick={() => routeTo("booking")}>Повторить</Button>
-              <Button variant="secondary" onClick={() => setModal("Перенос записи")}>Перенести</Button>
-              <Button variant="secondary" onClick={() => setModal("Отмена записи")}>Отменить</Button>
-            </div>
+        {isLoading ? (
+          <Card className="animate-pulse">
+            <p className="font-semibold text-cocoa">Загружаем записи...</p>
+            <p className="mt-2 text-sm text-slate-500">Проверяем актуальные бронирования.</p>
           </Card>
-        ))}
+        ) : (
+          currentAppointments.map((item) => (
+            <Card key={item.id}>
+              <AppointmentCard item={item} compact />
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={() => routeTo("booking")}>Повторить</Button>
+                <Button variant="secondary" onClick={() => setModal("Перенос записи")}>Перенести</Button>
+                <Button variant="secondary" onClick={() => setModal("Отмена записи")}>Отменить</Button>
+              </div>
+            </Card>
+          ))
+        )}
       </div>
       {modal && (
         <Modal title={modal} onClose={() => setModal(null)}>
