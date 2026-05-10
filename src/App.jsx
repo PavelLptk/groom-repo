@@ -158,7 +158,7 @@ function ServiceCard({ service }) {
           <p className="text-lg font-black text-cocoa">{money(service.price)}</p>
           <p className="text-sm text-slate-500">{service.duration}</p>
         </div>
-        <Button onClick={() => routeTo("booking")}>Записаться</Button>
+        <Button onClick={() => routeTo(`booking/${service.id}`)}>Записаться</Button>
       </div>
     </Card>
   );
@@ -309,12 +309,16 @@ function ServicesPage() {
   );
 }
 
-function BookingPage() {
+function bookingInitialServiceIdProp(initialServiceId) {
+  return initialServiceId && services.some((s) => s.id === initialServiceId) ? initialServiceId : services[0].id;
+}
+
+function BookingPage({ initialServiceId }) {
   const [step, setStep] = useState(0);
   const [contactError, setContactError] = useState("");
   const [isConfirming, setIsConfirming] = useState(false);
-  const [booking, setBooking] = useState({
-    serviceId: services[0].id,
+  const [booking, setBooking] = useState(() => ({
+    serviceId: bookingInitialServiceIdProp(initialServiceId),
     petName: pets[0].name,
     date: "2026-05-18",
     time: timeSlots[2],
@@ -324,8 +328,14 @@ function BookingPage() {
     comment: "",
     notification: "Telegram",
     prepay: true,
-  });
+  }));
   const steps = ["Услуга", "Питомец", "Дата", "Контакты", "Проверка"];
+
+  useEffect(() => {
+    if (!initialServiceId || !services.some((s) => s.id === initialServiceId)) return;
+    setBooking((prev) => ({ ...prev, serviceId: initialServiceId }));
+    setStep(0);
+  }, [initialServiceId]);
 
   const update = (field, value) => {
     if ((field === "name" || field === "phone") && contactError) {
@@ -445,6 +455,40 @@ function PetProfilePage() {
   );
 }
 
+function digitsOnly(value) {
+  return value.replace(/\D/g, "");
+}
+
+function validatePaymentFields(method, { cardNumber, expiry, cvv, phoneSbp }) {
+  if (method === "card") {
+    const cardDigits = digitsOnly(cardNumber);
+    if (cardDigits.length !== 16) {
+      return "Введите номер карты полностью — 16 цифр.";
+    }
+    const exp = expiry.trim();
+    if (!/^\d{2}\/\d{2}$/.test(exp)) {
+      return "Укажите срок действия в формате ММ/ГГ.";
+    }
+    const month = Number(exp.slice(0, 2));
+    if (month < 1 || month > 12) {
+      return "Месяц в сроке действия должен быть от 01 до 12.";
+    }
+    const cvvDigits = digitsOnly(cvv);
+    if (cvvDigits.length !== 3 && cvvDigits.length !== 4) {
+      return "Введите CVC/CVV — 3 или 4 цифры.";
+    }
+    return null;
+  }
+  const phoneDigits = digitsOnly(phoneSbp);
+  if (phoneDigits.length < 11) {
+    return "Укажите номер телефона полностью — не менее 11 цифр.";
+  }
+  if (!phoneDigits.startsWith("7")) {
+    return "Номер должен быть в формате РФ: начинается с 7 после +.";
+  }
+  return null;
+}
+
 function PaymentModalForm({ appointment, onClose, onPaid }) {
   const service = services.find((s) => s.id === appointment.serviceId);
   const [method, setMethod] = useState("card");
@@ -453,9 +497,16 @@ function PaymentModalForm({ appointment, onClose, onPaid }) {
   const [cvv, setCvv] = useState("");
   const [phoneSbp, setPhoneSbp] = useState("+7 ");
   const [submitted, setSubmitted] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
 
   const handleSubmit = (event) => {
     event.preventDefault();
+    const message = validatePaymentFields(method, { cardNumber, expiry, cvv, phoneSbp });
+    if (message) {
+      setSubmitError(message);
+      return;
+    }
+    setSubmitError(null);
     onPaid?.();
     setSubmitted(true);
   };
@@ -478,28 +529,75 @@ function PaymentModalForm({ appointment, onClose, onPaid }) {
       </div>
       <p className="text-xs text-slate-500">Учебная форма: реальные платежи не выполняются.</p>
       <Field label="Способ оплаты">
-        <Select value={method} onChange={(event) => setMethod(event.target.value)}>
+        <Select
+          value={method}
+          onChange={(event) => {
+            setSubmitError(null);
+            setMethod(event.target.value);
+          }}
+        >
           <option value="card">Банковская карта</option>
           <option value="sbp">СБП</option>
         </Select>
       </Field>
+      {submitError ? (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-800" role="alert">
+          {submitError}
+        </div>
+      ) : null}
       {method === "card" ? (
         <>
           <Field label="Номер карты">
-            <Input inputMode="numeric" autoComplete="cc-number" placeholder="0000 0000 0000 0000" maxLength={19} value={cardNumber} onChange={(event) => setCardNumber(event.target.value)} />
+            <Input
+              inputMode="numeric"
+              autoComplete="cc-number"
+              placeholder="0000 0000 0000 0000"
+              maxLength={19}
+              value={cardNumber}
+              onChange={(event) => {
+                setSubmitError(null);
+                setCardNumber(event.target.value);
+              }}
+            />
           </Field>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Срок (ММ/ГГ)">
-              <Input placeholder="ММ/ГГ" maxLength={5} value={expiry} onChange={(event) => setExpiry(event.target.value)} />
+              <Input
+                placeholder="ММ/ГГ"
+                maxLength={5}
+                value={expiry}
+                onChange={(event) => {
+                  setSubmitError(null);
+                  setExpiry(event.target.value);
+                }}
+              />
             </Field>
             <Field label="CVC/CVV">
-              <Input inputMode="numeric" type="password" placeholder="•••" maxLength={4} value={cvv} onChange={(event) => setCvv(event.target.value)} />
+              <Input
+                inputMode="numeric"
+                type="password"
+                placeholder="•••"
+                maxLength={4}
+                value={cvv}
+                onChange={(event) => {
+                  setSubmitError(null);
+                  setCvv(event.target.value);
+                }}
+              />
             </Field>
           </div>
         </>
       ) : (
         <Field label="Телефон, привязанный к СБП">
-          <Input type="tel" value={phoneSbp} onChange={(event) => setPhoneSbp(event.target.value)} placeholder="+7 900 000-00-00" />
+          <Input
+            type="tel"
+            value={phoneSbp}
+            onChange={(event) => {
+              setSubmitError(null);
+              setPhoneSbp(event.target.value);
+            }}
+            placeholder="+7 900 000-00-00"
+          />
         </Field>
       )}
       <div className="flex flex-wrap gap-3 pt-2">
@@ -688,11 +786,16 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  const [page] = hash.split("/");
+  const hashSegments = hash.split("/").filter(Boolean);
+  const page = hashSegments[0] ?? "";
+  const bookingServiceSegment = page === "booking" ? hashSegments[1] : undefined;
+  const bookingInitialServiceId =
+    bookingServiceSegment && services.some((s) => s.id === bookingServiceSegment) ? bookingServiceSegment : undefined;
+
   const currentPage = {
     "": <HomePage />,
     services: <ServicesPage />,
-    booking: <BookingPage />,
+    booking: <BookingPage initialServiceId={bookingInitialServiceId} />,
     pet: <PetProfilePage />,
     account: <AccountPage demoPaidById={demoPaidById} markDemoPaid={markDemoPaid} />,
     appointments: <AppointmentsPage demoPaidById={demoPaidById} markDemoPaid={markDemoPaid} />,
