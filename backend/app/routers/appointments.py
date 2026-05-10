@@ -3,14 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.auth_jwt import create_guest_manage_token
 from app.config import get_settings
-from app.deps import get_current_user, get_optional_user, parse_guest_appointment_token, require_admin
+from app.deps import get_current_user, require_admin, require_client
 from app.schemas import (
+    AppointmentCreateBody,
     AppointmentCreateResponse,
-    AppointmentCreateUnified,
     AppointmentPatch,
     AppointmentPublic,
     AppointmentStatusPatch,
@@ -19,18 +18,39 @@ from app.schemas import (
 )
 from app.schemas_enums import AppointmentStatus, NotificationChannel, UserRole
 from app.store import (
+    _uid,
     attach_payment_summary,
     can_transition_status,
     compute_available_slots,
-    ensure_user_for_phone,
-    normalize_phone,
     salon_tz,
     schedule_reminder_notifications,
     store,
-    _uid,
 )
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
+
+_SPECIES_RU = {"dog": "собаки", "cat": "кошки", "other": "других животных"}
+
+
+def _species_allowed_message(pet_species: str, allowed: list[str]) -> str:
+    species_ru = _SPECIES_RU.get(pet_species, pet_species)
+    if not allowed:
+        return f"Для этой услуги не заданы допустимые виды животных; выбранный питомец ({species_ru}) не может быть записан."
+    allowed_ru = ", ".join(_SPECIES_RU.get(s, s) for s in allowed)
+    return (
+        f"Вид питомца ({species_ru}) не подходит к выбранной услуге. "
+        f"Разрешены записи для: {allowed_ru}."
+    )
+
+
+def _assert_pet_species_allowed_for_service(pet: dict, svc: dict) -> None:
+    allowed = list(svc.get("species_allowed") or [])
+    ps = pet.get("species")
+    if ps not in allowed:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_species_allowed_message(str(ps), allowed),
+        )
 
 
 def _payment_model(raw: dict[str, Any] | None) -> PaymentSummary | None:
@@ -106,76 +126,47 @@ def list_appointments(
 @router.get("/{appointment_id}", response_model=AppointmentPublic)
 def get_appointment(
     appointment_id: str,
-    user: Annotated[dict | None, Depends(get_optional_user)],
-    manage_token: str | None = Query(default=None),
+    user: Annotated[dict, Depends(get_current_user)],
 ):
     a = store.appointments.get(appointment_id)
     if not a:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="appointment_not_found")
-    settings = get_settings()
-    if user and user.get("role") == UserRole.admin.value:
+    if user.get("role") == UserRole.admin.value:
         return _appointment_public(a)
-    if user and a.get("client_id") == user["id"]:
+    if a.get("client_id") == user["id"]:
         return _appointment_public(a)
-    if manage_token:
-        parsed = parse_guest_appointment_token(settings, manage_token)
-        if parsed and parsed[0] == appointment_id:
-            return _appointment_public(a)
     raise HTTPException(status.HTTP_403_FORBIDDEN, detail="forbidden")
 
 
 @router.post("", response_model=AppointmentCreateResponse, status_code=status.HTTP_201_CREATED)
 def create_appointment(
-    body: AppointmentCreateUnified,
-    user: Annotated[dict | None, Depends(get_optional_user)],
+    body: AppointmentCreateBody,
+    user: Annotated[dict, Depends(require_client)],
 ):
     svc = store.services.get(body.service_id)
     if not svc or not svc.get("is_active"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="service_not_found")
 
-    pet_id: str | None = body.pet_id
-    client_id: str | None = None
-    pet_snapshot: dict | None = None
+    pet = store.pets.get(body.pet_id)
+    if not pet or pet["owner_id"] != user["id"]:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="pet_not_owned")
 
-    if body.pet_id:
-        if not user or user.get("role") != UserRole.client.value:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="client_token_required")
-        pet = store.pets.get(body.pet_id)
-        if not pet or pet["owner_id"] != user["id"]:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="pet_not_owned")
-        client_id = user["id"]
-    else:
-        assert body.contact and body.pet
-        u = ensure_user_for_phone(
-            body.contact.display_name,
-            body.contact.phone,
-            str(body.contact.email) if body.contact.email else None,
-            None,
-        )
-        client_id = u["id"]
-        pid = _uid()
-        store.pets[pid] = {
-            "id": pid,
-            "owner_id": client_id,
-            "name": body.pet.name,
-            "species": body.pet.species.value,
-            "breed": body.pet.breed,
-            "size": body.pet.size,
-            "age_label": body.pet.age_label,
-            "notes": body.pet.notes,
-        }
-        pet_id = pid
-        pet_snapshot = {
-            "name": body.pet.name,
-            "species": body.pet.species.value,
-            "breed": body.pet.breed,
-        }
+    _assert_pet_species_allowed_for_service(pet, svc)
 
     start = body.scheduled_start
     if start.tzinfo is None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "validation_error", "details": [{"field": "scheduled_start", "code": "timezone_required", "message": "Укажите часовой пояс (например +03:00)."}]},
+            detail={
+                "error": "validation_error",
+                "details": [
+                    {
+                        "field": "scheduled_start",
+                        "code": "timezone_required",
+                        "message": "Укажите часовой пояс (например +03:00).",
+                    }
+                ],
+            },
         )
 
     if not _start_in_available_slot(start, body.service_id, None):
@@ -186,11 +177,12 @@ def create_appointment(
 
     end = start + timedelta(minutes=int(svc["duration_minutes"]))
     aid = _uid()
+    client_id = user["id"]
     row = {
         "id": aid,
         "client_id": client_id,
-        "pet_id": pet_id,
-        "pet_snapshot": pet_snapshot,
+        "pet_id": body.pet_id,
+        "pet_snapshot": None,
         "service_id": body.service_id,
         "scheduled_start": start,
         "scheduled_end": end,
@@ -216,14 +208,6 @@ def create_appointment(
         for r in scheduled_rows
     ]
 
-    settings = get_settings()
-    manage_token: str | None = None
-    msg: str | None = None
-    if not user:
-        phone_norm = normalize_phone(body.contact.phone) if body.contact else ""
-        manage_token = create_guest_manage_token(settings, aid, phone_norm)
-        msg = "Ссылка для управления записью (MVP): используйте manage_token в GET /appointments/{id}?manage_token=..."
-
     return AppointmentCreateResponse(
         id=aid,
         status=AppointmentStatus.pending_confirmation,
@@ -232,8 +216,6 @@ def create_appointment(
         scheduled_end=end,
         payment=_payment_model(attach_payment_summary(aid)),
         notifications_scheduled=notifications_scheduled,
-        manage_token=manage_token,
-        message=msg,
     )
 
 
@@ -277,6 +259,11 @@ def patch_appointment(
         new_svc = store.services.get(body.service_id)
         if not new_svc or not new_svc.get("is_active"):
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="service_not_found")
+        pid = a.get("pet_id")
+        if pid:
+            pet = store.pets.get(pid)
+            if pet:
+                _assert_pet_species_allowed_for_service(pet, new_svc)
         if not _start_in_available_slot(a["scheduled_start"], body.service_id, appointment_id):
             raise HTTPException(status.HTTP_409_CONFLICT, detail="slot_unavailable_for_new_service")
         a["service_id"] = body.service_id

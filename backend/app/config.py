@@ -20,7 +20,6 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="dev-insecure-change-me", alias="SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     access_token_expire_minutes: int = Field(default=60 * 24 * 7, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
-    guest_manage_token_expire_days: int = Field(default=30, alias="GUEST_MANAGE_TOKEN_EXPIRE_DAYS")
     cors_origins: str = Field(
         default="http://localhost:5173,http://127.0.0.1:5173",
         alias="CORS_ORIGINS",

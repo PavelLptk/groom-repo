@@ -20,7 +20,12 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="GroomCare Booking API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="GroomCare Booking API",
+    version="0.2.0",
+    lifespan=lifespan,
+    description="V2: без гостевой записи; запись только с JWT клиента; проверка вида питомца к услуге.",
+)
 
 
 @app.get("/")
@@ -90,16 +95,23 @@ from app.routers import (  # noqa: E402
     slots,
 )
 
+def register_api_v1(application: FastAPI) -> None:
+    v1 = APIRouter(prefix="/api/v1")
+    for mod in (
+        salon,
+        catalog,
+        slots,
+        auth_api,
+        me,
+        pets,
+        payments,
+        appointments,
+        notifications,
+        admin_jobs,
+    ):
+        v1.include_router(mod.router)
+    application.include_router(v1)
+
+
 app.include_router(health.router)
-v1 = APIRouter(prefix="/api/v1")
-v1.include_router(salon.router)
-v1.include_router(catalog.router)
-v1.include_router(slots.router)
-v1.include_router(auth_api.router)
-v1.include_router(me.router)
-v1.include_router(pets.router)
-v1.include_router(payments.router)
-v1.include_router(appointments.router)
-v1.include_router(notifications.router)
-v1.include_router(admin_jobs.router)
-app.include_router(v1)
+register_api_v1(app)

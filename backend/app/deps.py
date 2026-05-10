@@ -4,8 +4,9 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError
 
-from app.auth_jwt import decode_token, try_decode
+from app.auth_jwt import decode_token
 from app.config import Settings, get_settings
 from app.schemas_enums import UserRole
 from app.store import store
@@ -29,10 +30,10 @@ async def get_optional_user(
         return None
     try:
         payload = decode_token(settings, credentials.credentials)
-    except Exception:
+    except JWTError:
         return None
     uid = payload.get("sub")
-    if not uid or payload.get("typ") == "guest_appointment":
+    if not uid:
         return None
     return _user_from_sub(str(uid))
 
@@ -45,12 +46,12 @@ async def get_current_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="not_authenticated")
     try:
         payload = decode_token(settings, credentials.credentials)
-    except Exception as exc:
+    except JWTError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="invalid_token") from exc
-    if payload.get("typ") == "guest_appointment":
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="use_client_token")
     uid = payload.get("sub")
-    user = _user_from_sub(str(uid)) if uid else None
+    if not uid:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
+    user = _user_from_sub(str(uid))
     if not user:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="user_not_found")
     return user
@@ -68,11 +69,11 @@ async def require_client_or_admin(user: Annotated[dict, Depends(get_current_user
     return user
 
 
-def parse_guest_appointment_token(settings: Settings, token: str) -> tuple[str, str] | None:
-    payload = try_decode(settings, token)
-    if not payload or payload.get("typ") != "guest_appointment":
-        return None
-    aid = payload.get("appointment_id")
-    if not aid:
-        return None
-    return str(aid), str(payload.get("sub") or "")
+async def require_client(user: Annotated[dict, Depends(get_current_user)]):
+    """Создание онлайн-записи — только для роли client."""
+    if user.get("role") != UserRole.client.value:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Только клиенты могут создавать запись через этот метод.",
+        )
+    return user

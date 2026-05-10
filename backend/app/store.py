@@ -308,36 +308,6 @@ def compute_available_slots(
     return result
 
 
-def ensure_user_for_phone(
-    display_name: str,
-    phone_raw: str,
-    email: str | None,
-    telegram_username: str | None = None,
-) -> dict[str, Any]:
-    key = normalize_phone(phone_raw)
-    uid_existing = store.users_by_phone.get(key)
-    if uid_existing:
-        u = store.users[uid_existing]
-        if email:
-            u["email"] = email
-        if telegram_username:
-            u["telegram_username"] = telegram_username
-        return u
-    uid = _uid()
-    u = {
-        "id": uid,
-        "role": UserRole.client.value,
-        "display_name": display_name,
-        "phone": key,
-        "email": email,
-        "telegram_username": telegram_username,
-        "created_at": datetime.now(UTC),
-    }
-    store.users[uid] = u
-    store.users_by_phone[key] = uid
-    return u
-
-
 def can_transition_status(current: str, new: str, actor: UserRole) -> bool:
     if current == new:
         return True

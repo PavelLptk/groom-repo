@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ACTIVE_APPOINTMENT_STATUSES_EN,
   ApiError,
@@ -17,6 +17,7 @@ import {
   mapPet,
   mapService,
   notificationUiToApi,
+  patchAppointment,
   setToken as saveToken,
 } from "./api";
 import { benefits } from "./constants";
@@ -42,6 +43,11 @@ function appointmentCanPay(item) {
   if (item.statusEn === "cancelled" || item.statusEn === "paid") return false;
   if (item.paymentRaw?.status === "succeeded") return false;
   return true;
+}
+
+/** Клиент может отменить только до оплаты (см. can_transition_status на бэкенде). */
+function appointmentCanCancel(item) {
+  return item.statusEn === "pending_confirmation" || item.statusEn === "confirmed";
 }
 
 function money(value) {
@@ -225,7 +231,7 @@ function PetCard({ pet }) {
   );
 }
 
-function AppointmentCard({ item, services, compact = false, footer = null }) {
+function AppointmentCard({ item, services, compact = false, footer = null, onReschedule, onCancel }) {
   const service = services.find((entry) => entry.id === item.serviceId);
 
   return (
@@ -252,8 +258,22 @@ function AppointmentCard({ item, services, compact = false, footer = null }) {
             <Button variant="secondary" onClick={() => routeTo("booking")}>
               Повторить
             </Button>
-            <Button variant="secondary">Перенести</Button>
-            <Button variant="secondary">Отменить</Button>
+            {onReschedule ? (
+              <Button variant="secondary" type="button" onClick={() => onReschedule(item)}>
+                Перенести
+              </Button>
+            ) : null}
+            {onCancel ? (
+              <Button
+                variant="secondary"
+                type="button"
+                onClick={() => onCancel(item)}
+                disabled={!appointmentCanCancel(item)}
+                title={!appointmentCanCancel(item) ? "Отмена недоступна для оплаченных записей" : undefined}
+              >
+                Отменить
+              </Button>
+            ) : null}
           </div>
         </div>
       )}
@@ -262,8 +282,9 @@ function AppointmentCard({ item, services, compact = false, footer = null }) {
   );
 }
 
-function BookingSummary({ booking, services, onPrepayChange = () => {}, showPrepayBlock = true }) {
+function BookingSummary({ booking, services, user, onPrepayChange = () => {}, showPrepayBlock = true }) {
   const selectedService = services.find((service) => service.id === booking.serviceId);
+  const clientDisplay = user?.display_name || booking.name || "—";
 
   return (
     <Card className="bg-orange-50">
@@ -289,7 +310,7 @@ function BookingSummary({ booking, services, onPrepayChange = () => {}, showPrep
         </div>
         <div className="flex justify-between gap-4">
           <dt>Клиент</dt>
-          <dd className="font-semibold">{booking.name || "Имя"}</dd>
+          <dd className="font-semibold">{clientDisplay}</dd>
         </div>
         <div className="flex justify-between gap-4">
           <dt>Уведомление</dt>
@@ -411,6 +432,15 @@ function todayYmd() {
   return `${y}-${m}-${day}`;
 }
 
+function isoDateLocalYmd(iso) {
+  if (!iso) return todayYmd();
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function slotTimeLabel(iso) {
   const d = new Date(iso);
   return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -426,15 +456,11 @@ function BookingPage({ initialServiceId, services, token, pets, user, onAfterBoo
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsError, setSlotsError] = useState(null);
 
+  const steps = ["Услуга", "Питомец", "Дата и время", "Напоминание", "Проверка"];
+
   const [booking, setBooking] = useState(() => ({
     serviceId: firstId,
     petId: "",
-    petName: "",
-    guestSpecies: "dog",
-    guestBreed: "",
-    guestSize: "Средний",
-    guestAge: "",
-    guestNotes: "",
     date: todayYmd(),
     slotIso: "",
     timeLabel: "",
@@ -459,7 +485,7 @@ function BookingPage({ initialServiceId, services, token, pets, user, onAfterBoo
   }, [initialServiceId, services]);
 
   useEffect(() => {
-    if (!booking.serviceId || !booking.date || step !== 2) return;
+    if (!token || !booking.serviceId || !booking.date || step !== 2) return;
     let cancelled = false;
     (async () => {
       setSlotsLoading(true);
@@ -483,15 +509,12 @@ function BookingPage({ initialServiceId, services, token, pets, user, onAfterBoo
     return () => {
       cancelled = true;
     };
-  }, [booking.serviceId, booking.date, step]);
-
-  const hasAuthPets = Boolean(token && pets.length > 0);
+  }, [token, booking.serviceId, booking.date, step]);
 
   useEffect(() => {
-    if (hasAuthPets && !booking.petId && pets[0]?.id) {
-      setBooking((p) => ({ ...p, petId: pets[0].id }));
-    }
-  }, [hasAuthPets, pets, booking.petId]);
+    if (!token || !pets.length || booking.petId) return;
+    setBooking((p) => ({ ...p, petId: pets[0].id }));
+  }, [token, pets, booking.petId]);
 
   useEffect(() => {
     if (user) {
@@ -504,27 +527,18 @@ function BookingPage({ initialServiceId, services, token, pets, user, onAfterBoo
     }
   }, [user]);
 
-  const steps = ["Услуга", "Питомец", "Дата", "Контакты", "Проверка"];
-
   const update = (field, value) => {
-    if ((field === "name" || field === "phone") && contactError) setContactError("");
+    if (contactError) setContactError("");
     if (submitError) setSubmitError("");
     setBooking((current) => ({ ...current, [field]: value }));
   };
 
   const goNext = () => {
     if (step === 1) {
-      if (hasAuthPets) {
-        const pet = pets.find((p) => p.id === booking.petId);
-        if (!pet) {
-          setContactError("Выберите питомца");
-          return;
-        }
-      } else {
-        if (!booking.petName.trim()) {
-          setContactError("Укажите имя питомца");
-          return;
-        }
+      const pet = pets.find((p) => p.id === booking.petId);
+      if (!pet) {
+        setContactError("Выберите питомца");
+        return;
       }
     }
     if (step === 2) {
@@ -532,10 +546,6 @@ function BookingPage({ initialServiceId, services, token, pets, user, onAfterBoo
         setContactError("Выберите время");
         return;
       }
-    }
-    if (step === 3 && (!booking.name.trim() || !booking.phone.trim())) {
-      setContactError("Мы не нашли данные записи");
-      return;
     }
     if (contactError) setContactError("");
     setStep((value) => Math.min(steps.length - 1, value + 1));
@@ -546,37 +556,13 @@ function BookingPage({ initialServiceId, services, token, pets, user, onAfterBoo
     setIsConfirming(true);
     try {
       const ch = notificationUiToApi(booking.notification);
-      let body;
-      if (token && hasAuthPets) {
-        body = {
-          service_id: booking.serviceId,
-          pet_id: booking.petId,
-          scheduled_start: booking.slotIso,
-          client_comment: booking.comment || "",
-          notification_channel: ch,
-        };
-      } else {
-        body = {
-          service_id: booking.serviceId,
-          scheduled_start: booking.slotIso,
-          contact: {
-            display_name: booking.name.trim(),
-            phone: booking.phone.trim(),
-            email: booking.email.trim() || null,
-          },
-          pet: {
-            name: booking.petName.trim(),
-            species: booking.guestSpecies,
-            breed: booking.guestBreed || "",
-            size: booking.guestSize || "",
-            age_label: booking.guestAge || "",
-            notes: booking.guestNotes || "",
-          },
-          client_comment: booking.comment || "",
-          notification_channel: ch,
-        };
-      }
-      await createAppointment(body);
+      await createAppointment({
+        service_id: booking.serviceId,
+        pet_id: booking.petId,
+        scheduled_start: booking.slotIso,
+        client_comment: booking.comment || "",
+        notification_channel: ch,
+      });
       await onAfterBooking?.();
       routeTo("appointments");
     } catch (e) {
@@ -586,7 +572,29 @@ function BookingPage({ initialServiceId, services, token, pets, user, onAfterBoo
     }
   };
 
-  const petDisplayName = hasAuthPets ? pets.find((p) => p.id === booking.petId)?.name || "" : booking.petName;
+  if (!token) {
+    return (
+      <PageTitle title="Онлайн-запись" subtitle="Войдите в кабинет, чтобы выбрать питомца и время.">
+        <Card className="max-w-lg">
+          <p className="mb-4 text-slate-600">Запись без аккаунта недоступна — используйте телефон для входа или регистрации.</p>
+          <Button onClick={() => routeTo("account")}>Войти или зарегистрироваться</Button>
+        </Card>
+      </PageTitle>
+    );
+  }
+
+  if (!pets.length) {
+    return (
+      <PageTitle title="Онлайн-запись" subtitle="Сначала добавьте питомца в профиле.">
+        <Card className="max-w-lg">
+          <p className="mb-4 text-slate-600">Чтобы записаться, нужен хотя бы один питомец в кабинете.</p>
+          <Button onClick={() => routeTo("pet")}>Добавить питомца</Button>
+        </Card>
+      </PageTitle>
+    );
+  }
+
+  const petDisplayName = pets.find((p) => p.id === booking.petId)?.name || "";
 
   const summaryBooking = {
     ...booking,
@@ -621,47 +629,16 @@ function BookingPage({ initialServiceId, services, token, pets, user, onAfterBoo
           )}
           {step === 1 && (
             <div className="grid gap-4">
-              {hasAuthPets ? (
-                <Field label="Питомец">
-                  <Select value={booking.petId} onChange={(event) => update("petId", event.target.value)}>
-                    <option value="">— выберите —</option>
-                    {pets.map((pet) => (
-                      <option key={pet.id} value={pet.id}>
-                        {pet.name}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-              ) : (
-                <>
-                  <Field label="Имя питомца">
-                    <Input value={booking.petName} onChange={(e) => update("petName", e.target.value)} />
-                  </Field>
-                  <Field label="Вид">
-                    <Select value={booking.guestSpecies} onChange={(e) => update("guestSpecies", e.target.value)}>
-                      <option value="dog">Собака</option>
-                      <option value="cat">Кошка</option>
-                      <option value="other">Другое</option>
-                    </Select>
-                  </Field>
-                  <Field label="Порода">
-                    <Input value={booking.guestBreed} onChange={(e) => update("guestBreed", e.target.value)} />
-                  </Field>
-                  <Field label="Размер">
-                    <Select value={booking.guestSize} onChange={(e) => update("guestSize", e.target.value)}>
-                      <option>Маленький</option>
-                      <option>Средний</option>
-                      <option>Крупный</option>
-                    </Select>
-                  </Field>
-                  <Field label="Возраст">
-                    <Input value={booking.guestAge} onChange={(e) => update("guestAge", e.target.value)} placeholder="например 3 года" />
-                  </Field>
-                  <Field label="Заметки">
-                    <Textarea value={booking.guestNotes} onChange={(e) => update("guestNotes", e.target.value)} />
-                  </Field>
-                </>
-              )}
+              <Field label="Питомец">
+                <Select value={booking.petId} onChange={(event) => update("petId", event.target.value)}>
+                  <option value="">— выберите —</option>
+                  {pets.map((pet) => (
+                    <option key={pet.id} value={pet.id}>
+                      {pet.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
               {contactError && step === 1 ? <p className="text-sm font-semibold text-rose-700">{contactError}</p> : null}
             </div>
           )}
@@ -702,15 +679,6 @@ function BookingPage({ initialServiceId, services, token, pets, user, onAfterBoo
               {contactError && (
                 <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 font-semibold text-rose-800 md:col-span-2">{contactError}</div>
               )}
-              <Field label="Имя клиента">
-                <Input value={booking.name} onChange={(event) => update("name", event.target.value)} />
-              </Field>
-              <Field label="Телефон">
-                <Input value={booking.phone} onChange={(event) => update("phone", event.target.value)} />
-              </Field>
-              <Field label="Email или Telegram">
-                <Input value={booking.email} onChange={(event) => update("email", event.target.value)} />
-              </Field>
               <Field label="Способ уведомления">
                 <Select value={booking.notification} onChange={(event) => update("notification", event.target.value)}>
                   {["Telegram", "Телефон", "Email"].map((item) => (
@@ -720,9 +688,11 @@ function BookingPage({ initialServiceId, services, token, pets, user, onAfterBoo
                   ))}
                 </Select>
               </Field>
-              <Field label="Комментарий грумеру">
-                <Textarea value={booking.comment} onChange={(event) => update("comment", event.target.value)} />
-              </Field>
+              <div className="md:col-span-2">
+                <Field label="Комментарий грумеру">
+                  <Textarea value={booking.comment} onChange={(event) => update("comment", event.target.value)} />
+                </Field>
+              </div>
             </div>
           )}
           {step === 4 && (
@@ -746,7 +716,7 @@ function BookingPage({ initialServiceId, services, token, pets, user, onAfterBoo
             )}
           </div>
         </Card>
-        <BookingSummary booking={summaryBooking} services={services} onPrepayChange={(value) => update("prepay", value)} showPrepayBlock />
+        <BookingSummary booking={summaryBooking} services={services} user={user} onPrepayChange={(value) => update("prepay", value)} showPrepayBlock />
       </div>
     </PageTitle>
   );
@@ -1000,7 +970,142 @@ function PaymentModalForm({ appointment, services, onClose, onPaid }) {
   );
 }
 
-function AppointmentRecordActions({ item, onOpenPay, onOpenInfo }) {
+function CancelAppointmentModal({ appointment, onClose, onDone }) {
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const confirm = async () => {
+    setErr(null);
+    setLoading(true);
+    try {
+      await patchAppointment(appointment.id, { cancel: true });
+      await onDone?.();
+      onClose();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Не удалось отменить запись");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal title="Отмена записи" onClose={onClose}>
+      <p className="text-slate-700">
+        Отменить запись на <span className="font-semibold text-cocoa">{appointment.date}</span>,{" "}
+        <span className="font-semibold text-cocoa">{appointment.time}</span>?
+      </p>
+      {err ? <p className="mt-4 text-sm font-semibold text-rose-700">{err}</p> : null}
+      <div className="mt-6 flex flex-wrap gap-3">
+        <Button variant="secondary" type="button" onClick={onClose} disabled={loading}>
+          Нет
+        </Button>
+        <Button type="button" onClick={confirm} disabled={loading}>
+          {loading ? "Отмена..." : "Да, отменить"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+function RescheduleAppointmentModal({ appointment, services, onClose, onDone }) {
+  const [dateYmd, setDateYmd] = useState(() => isoDateLocalYmd(appointment.scheduledStart));
+  const [slots, setSlots] = useState([]);
+  const [slotIso, setSlotIso] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsError, setSlotsError] = useState(null);
+  const [submitError, setSubmitError] = useState(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!appointment.serviceId || !dateYmd) return undefined;
+    (async () => {
+      setSlotsLoading(true);
+      setSlotsError(null);
+      setSlots([]);
+      setSlotIso("");
+      try {
+        const data = await fetchSlots(dateYmd, appointment.serviceId);
+        if (!cancelled) {
+          const list = (data.slots || []).map((s) => ({ iso: s.start, label: slotTimeLabel(s.start) }));
+          setSlots(list);
+        }
+      } catch (e) {
+        if (!cancelled) setSlotsError(e instanceof ApiError ? e.message : "Не удалось загрузить слоты");
+      } finally {
+        if (!cancelled) setSlotsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dateYmd, appointment.serviceId, retryNonce]);
+
+  const submit = async () => {
+    if (!slotIso) return;
+    setSubmitError(null);
+    setLoading(true);
+    try {
+      await patchAppointment(appointment.id, { scheduled_start: slotIso });
+      await onDone?.();
+      onClose();
+    } catch (e) {
+      setSubmitError(e instanceof ApiError ? e.message : "Не удалось перенести запись");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const svc = services.find((s) => s.id === appointment.serviceId);
+
+  return (
+    <Modal wide title="Перенос записи" onClose={onClose}>
+      <p className="text-sm text-slate-600">
+        Услуга: <span className="font-semibold text-cocoa">{svc?.title || "—"}</span>
+      </p>
+      <div className="mt-4 grid gap-4">
+        <Field label="Новая дата">
+          <Input type="date" value={dateYmd} onChange={(e) => setDateYmd(e.target.value)} />
+        </Field>
+        <Field label="Свободное время">
+          {slotsLoading ? <LoadingBlock message="Загрузка слотов..." /> : null}
+          {slotsError ? <ErrorBlock message={slotsError} onRetry={() => setRetryNonce((n) => n + 1)} /> : null}
+          {!slotsLoading && !slotsError && slots.length === 0 ? (
+            <p className="text-sm text-slate-600">Нет свободных слотов на эту дату.</p>
+          ) : null}
+          {!slotsLoading && !slotsError && slots.length > 0 ? (
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+              {slots.map((slot) => (
+                <button
+                  key={slot.iso}
+                  type="button"
+                  className={`rounded-2xl border p-3 text-sm font-semibold ${
+                    slotIso === slot.iso ? "border-cocoa bg-cocoa text-white" : "border-orange-100 bg-white text-cocoa"
+                  }`}
+                  onClick={() => setSlotIso(slot.iso)}
+                >
+                  {slot.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </Field>
+      </div>
+      {submitError ? <p className="mt-4 text-sm font-semibold text-rose-700">{submitError}</p> : null}
+      <div className="mt-6 flex flex-wrap gap-3">
+        <Button variant="secondary" type="button" onClick={onClose} disabled={loading}>
+          Закрыть
+        </Button>
+        <Button type="button" onClick={submit} disabled={loading || !slotIso}>
+          {loading ? "Сохранение..." : "Сохранить время"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+function AppointmentRecordActions({ item, onOpenPay, onReschedule, onCancel }) {
   return (
     <div className="flex flex-wrap gap-2 border-t border-orange-100 pt-4">
       {appointmentCanPay(item) ? (
@@ -1011,10 +1116,16 @@ function AppointmentRecordActions({ item, onOpenPay, onOpenInfo }) {
       <Button variant="secondary" type="button" onClick={() => routeTo("booking")}>
         Повторить
       </Button>
-      <Button variant="secondary" type="button" onClick={() => onOpenInfo("Перенос записи")}>
+      <Button variant="secondary" type="button" onClick={() => onReschedule(item)}>
         Перенести
       </Button>
-      <Button variant="secondary" type="button" onClick={() => onOpenInfo("Отмена записи")}>
+      <Button
+        variant="secondary"
+        type="button"
+        onClick={() => onCancel(item)}
+        disabled={!appointmentCanCancel(item)}
+        title={!appointmentCanCancel(item) ? "Отмена недоступна для оплаченных записей" : undefined}
+      >
         Отменить
       </Button>
     </div>
@@ -1129,7 +1240,8 @@ function AccountPage({ token, user, pets, appointments, services, userLoading, u
                     <AppointmentRecordActions
                       item={item}
                       onOpenPay={(entry) => setModal({ kind: "pay", appointment: entry })}
-                      onOpenInfo={(title) => setModal({ kind: "info", title })}
+                      onReschedule={(entry) => setModal({ kind: "reschedule", appointment: entry })}
+                      onCancel={(entry) => setModal({ kind: "cancel", appointment: entry })}
                     />
                   }
                 />
@@ -1138,14 +1250,23 @@ function AccountPage({ token, user, pets, appointments, services, userLoading, u
           </Section>
         </div>
       </div>
-      {modal?.kind === "info" && (
-        <Modal title={modal.title} onClose={() => setModal(null)}>
-          <p className="text-slate-600">В следующей версии здесь будут перенос и отмена через API.</p>
-          <Button className="mt-5" onClick={() => setModal(null)}>
-            Готово
-          </Button>
-        </Modal>
-      )}
+      {modal?.kind === "cancel" && modal.appointment ? (
+        <CancelAppointmentModal
+          key={modal.appointment.id}
+          appointment={modal.appointment}
+          onClose={() => setModal(null)}
+          onDone={refreshUser}
+        />
+      ) : null}
+      {modal?.kind === "reschedule" && modal.appointment ? (
+        <RescheduleAppointmentModal
+          key={modal.appointment.id}
+          appointment={modal.appointment}
+          services={services}
+          onClose={() => setModal(null)}
+          onDone={refreshUser}
+        />
+      ) : null}
       {modal?.kind === "pay" && (
         <Modal wide title="Оплата записи" onClose={() => setModal(null)}>
           <PaymentModalForm
@@ -1198,20 +1319,30 @@ function AppointmentsPage({ token, appointments, services, userLoading, userErro
                 <AppointmentRecordActions
                   item={item}
                   onOpenPay={(entry) => setModal({ kind: "pay", appointment: entry })}
-                  onOpenInfo={(title) => setModal({ kind: "info", title })}
+                  onReschedule={(entry) => setModal({ kind: "reschedule", appointment: entry })}
+                  onCancel={(entry) => setModal({ kind: "cancel", appointment: entry })}
                 />
               }
             />
           ))}
       </div>
-      {modal?.kind === "info" && (
-        <Modal title={modal.title} onClose={() => setModal(null)}>
-          <p className="text-slate-600">В следующей версии здесь будут перенос и отмена через API.</p>
-          <Button className="mt-5" onClick={() => setModal(null)}>
-            Готово
-          </Button>
-        </Modal>
-      )}
+      {modal?.kind === "cancel" && modal.appointment ? (
+        <CancelAppointmentModal
+          key={modal.appointment.id}
+          appointment={modal.appointment}
+          onClose={() => setModal(null)}
+          onDone={refreshUser}
+        />
+      ) : null}
+      {modal?.kind === "reschedule" && modal.appointment ? (
+        <RescheduleAppointmentModal
+          key={modal.appointment.id}
+          appointment={modal.appointment}
+          services={services}
+          onClose={() => setModal(null)}
+          onDone={refreshUser}
+        />
+      ) : null}
       {modal?.kind === "pay" && (
         <Modal wide title="Оплата записи" onClose={() => setModal(null)}>
           <PaymentModalForm appointment={modal.appointment} services={services} onClose={() => setModal(null)} onPaid={refreshUser} />

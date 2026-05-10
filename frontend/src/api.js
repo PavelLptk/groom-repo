@@ -202,7 +202,16 @@ export function createAppointment(body) {
   return apiFetch("/api/v1/appointments", {
     method: "POST",
     body,
-    auth: !!getToken(),
+    auth: true,
+  });
+}
+
+/** Отмена (`cancel: true`) или перенос (`scheduled_start`: ISO из слотов). */
+export function patchAppointment(appointmentId, body) {
+  return apiFetch(`/api/v1/appointments/${encodeURIComponent(appointmentId)}`, {
+    method: "PATCH",
+    auth: true,
+    body,
   });
 }
 

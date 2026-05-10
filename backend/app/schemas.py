@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.schemas_enums import (
     AppointmentStatus,
@@ -155,43 +155,15 @@ class PetPatch(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
 
 
-# --- Guest contact / pet (appointments)
-class GuestContact(BaseModel):
-    display_name: str = Field(min_length=1, max_length=120)
-    phone: str = Field(min_length=5, max_length=40)
-    email: EmailStr | None = None
-
-
-class GuestPet(BaseModel):
-    name: str = Field(min_length=1, max_length=80)
-    species: PetSpecies
-    breed: str = Field(default="", max_length=120)
-    size: str = Field(default="", max_length=40)
-    age_label: str = Field(default="", max_length=80)
-    notes: str = Field(default="", max_length=2000)
-
-
 # --- Appointment
-class AppointmentCreateUnified(BaseModel):
+class AppointmentCreateBody(BaseModel):
+    """Создание записи только для авторизованного клиента (pet_id обязателен)."""
+
     service_id: str = Field(min_length=1, max_length=80)
     scheduled_start: datetime
-    pet_id: str | None = Field(default=None, max_length=80)
-    contact: GuestContact | None = None
-    pet: GuestPet | None = None
+    pet_id: str = Field(min_length=1, max_length=80)
     client_comment: str = Field(default="", max_length=2000)
     notification_channel: NotificationChannel = NotificationChannel.email
-
-    @model_validator(mode="after")
-    def guest_or_client(self) -> AppointmentCreateUnified:
-        has_pet_id = bool(self.pet_id)
-        has_guest = bool(self.contact and self.pet)
-        if has_pet_id and has_guest:
-            msg = "Укажите либо pet_id (личный кабинет), либо контакты и питомца (гость)."
-            raise ValueError(msg)
-        if not has_pet_id and not has_guest:
-            msg = "Нужен pet_id для авторизованного клиента или contact+pet для гостя."
-            raise ValueError(msg)
-        return self
 
 
 class PaymentSummary(BaseModel):
@@ -235,8 +207,6 @@ class AppointmentCreateResponse(BaseModel):
     scheduled_end: datetime
     payment: PaymentSummary | None
     notifications_scheduled: list[NotificationScheduledPublic]
-    manage_token: str | None = None
-    message: str | None = None
 
 
 class AppointmentPatch(BaseModel):
