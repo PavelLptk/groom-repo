@@ -130,6 +130,28 @@ export const appointments = [
     amount: 700,
     payment: "не оплачена",
   },
+  {
+    id: "a4",
+    serviceId: "haircut",
+    pet: "Бублик",
+    date: "22 мая",
+    time: "15:00",
+    status: "оплачена",
+    address: salon.address,
+    amount: 2500,
+    payment: "оплачена",
+  },
+  {
+    id: "a5",
+    serviceId: "ears",
+    pet: "Марс",
+    date: "25 мая",
+    time: "11:00",
+    status: "ожидает подтверждения",
+    address: salon.address,
+    amount: 900,
+    payment: "предоплата ожидается",
+  },
 ];
 
 export const timeSlots = ["09:00", "10:30", "12:30", "15:00", "17:30", "19:00"];

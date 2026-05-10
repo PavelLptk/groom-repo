@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+﻿import { useCallback, useEffect, useState } from "react";
 import { appointments, benefits, pets, salon, services, timeSlots } from "./data";
 
 const navItems = [
@@ -19,6 +19,17 @@ const statusStyles = {
 };
 
 const currentAppointmentStatuses = ["ожидает подтверждения", "подтверждена", "оплачена"];
+
+function appointmentCanPay(item) {
+  if (item.status === "отменена" || item.status === "оплачена") return false;
+  if (item.payment === "оплачена") return false;
+  return true;
+}
+
+function mergeDemoPaid(item, demoPaidById) {
+  if (!demoPaidById[item.id]) return item;
+  return { ...item, status: "оплачена", payment: "оплачена" };
+}
 
 function money(value) {
   return `${value.toLocaleString("ru-RU")} ₽`;
@@ -74,10 +85,10 @@ function Textarea(props) {
   return <textarea className="min-h-28 w-full rounded-2xl border border-orange-100 bg-white px-4 py-3 outline-none focus:border-cocoa" {...props} />;
 }
 
-function Modal({ title, children, onClose }) {
+function Modal({ title, children, onClose, wide = false }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-cocoa/30 p-4">
-      <Card className="w-full max-w-md">
+      <Card className={`w-full ${wide ? "max-w-lg" : "max-w-md"}`}>
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-xl font-bold text-cocoa">{title}</h3>
           <button className="text-2xl text-slate-400" onClick={onClose} aria-label="Закрыть">
@@ -164,7 +175,7 @@ function PetCard({ pet }) {
   );
 }
 
-function AppointmentCard({ item, compact = false }) {
+function AppointmentCard({ item, compact = false, footer = null }) {
   const service = services.find((entry) => entry.id === item.serviceId);
 
   return (
@@ -177,9 +188,14 @@ function AppointmentCard({ item, compact = false }) {
         </div>
         <Badge className={statusStyles[item.status] || "bg-slate-100 text-slate-700"}>{item.status}</Badge>
       </div>
+      <div className="mt-4 border-t border-orange-100 pt-4">
+        <p className="text-lg font-black text-cocoa">{money(item.amount)}</p>
+        <p className="mt-1 text-sm text-slate-600">
+          <span className="font-semibold text-slate-700">Оплата:</span> {item.payment}
+        </p>
+      </div>
       {!compact && (
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-slate-600">{money(item.amount)} · {item.payment}</p>
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => routeTo("booking")}>Повторить</Button>
             <Button variant="secondary">Перенести</Button>
@@ -187,11 +203,12 @@ function AppointmentCard({ item, compact = false }) {
           </div>
         </div>
       )}
+      {footer}
     </Card>
   );
 }
 
-function BookingSummary({ booking }) {
+function BookingSummary({ booking, onPrepayChange = () => {}, showPrepayBlock = true }) {
   const selectedService = services.find((service) => service.id === booking.serviceId);
 
   return (
@@ -199,12 +216,25 @@ function BookingSummary({ booking }) {
       <h3 className="text-xl font-bold text-cocoa">Итог записи</h3>
       <dl className="mt-4 space-y-2 text-sm text-slate-700">
         <div className="flex justify-between gap-4"><dt>Услуга</dt><dd className="font-semibold">{selectedService?.title || "Не выбрана"}</dd></div>
+        <div className="flex justify-between gap-4"><dt>Стоимость</dt><dd className="font-semibold">{selectedService ? money(selectedService.price) : "—"}</dd></div>
         <div className="flex justify-between gap-4"><dt>Питомец</dt><dd className="font-semibold">{booking.petName || "Не указан"}</dd></div>
         <div className="flex justify-between gap-4"><dt>Дата и время</dt><dd className="font-semibold">{booking.date || "Дата"} · {booking.time || "время"}</dd></div>
         <div className="flex justify-between gap-4"><dt>Клиент</dt><dd className="font-semibold">{booking.name || "Имя"}</dd></div>
         <div className="flex justify-between gap-4"><dt>Уведомление</dt><dd className="font-semibold">{booking.notification}</dd></div>
         <div className="flex justify-between gap-4"><dt>Предоплата</dt><dd className="font-semibold">{booking.prepay ? "Нужна" : "Позже"}</dd></div>
       </dl>
+      {showPrepayBlock && (
+        <div className="mt-5 rounded-2xl border border-orange-200 bg-white p-4 shadow-sm">
+          <h4 className="text-sm font-bold uppercase tracking-wide text-cocoa">Предоплата</h4>
+          <p className="mt-2 text-sm leading-relaxed text-slate-600">
+            На востребованные слоты и длинные услуги салон может запросить предоплату. Отметьте, если готовы внести её заранее — мы уточним сумму и способ оплаты в сообщении или по телефону.
+          </p>
+          <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-orange-100 bg-orange-50/80 p-4 text-sm font-semibold text-slate-700">
+            <input className="mt-1 h-4 w-4 shrink-0 accent-cocoa" type="checkbox" checked={booking.prepay} onChange={(event) => onPrepayChange(event.target.checked)} />
+            <span>Нужна предоплата</span>
+          </label>
+        </div>
+      )}
     </Card>
   );
 }
@@ -371,13 +401,13 @@ function BookingPage() {
                 </Select>
               </Field>
               <Field label="Комментарий грумеру"><Textarea value={booking.comment} onChange={(event) => update("comment", event.target.value)} /></Field>
-              <label className="flex items-center gap-3 rounded-2xl bg-orange-50 p-4 font-semibold text-slate-700">
-                <input type="checkbox" checked={booking.prepay} onChange={(event) => update("prepay", event.target.checked)} />
-                Нужна предоплата
-              </label>
             </div>
           )}
-          {step === 4 && <BookingSummary booking={booking} />}
+          {step === 4 && (
+            <p className="text-sm leading-relaxed text-slate-600">
+              Проверьте итог записи в блоке справа: услугу, время и предоплату. Если всё верно, нажмите «Подтвердить запись».
+            </p>
+          )}
           {isConfirming && (
             <div className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-4 font-semibold text-cocoa">
               Подтверждаем запись...
@@ -388,7 +418,7 @@ function BookingPage() {
             {step < steps.length - 1 ? <Button disabled={isConfirming} onClick={goNext}>Дальше</Button> : <Button disabled={isConfirming} onClick={confirm}>{isConfirming ? "Подтверждаем..." : "Подтвердить запись"}</Button>}
           </div>
         </Card>
-        <BookingSummary booking={booking} />
+        <BookingSummary booking={booking} onPrepayChange={(value) => update("prepay", value)} showPrepayBlock />
       </div>
     </PageTitle>
   );
@@ -415,7 +445,86 @@ function PetProfilePage() {
   );
 }
 
-function AccountPage() {
+function PaymentModalForm({ appointment, onClose, onPaid }) {
+  const service = services.find((s) => s.id === appointment.serviceId);
+  const [method, setMethod] = useState("card");
+  const [cardNumber, setCardNumber] = useState("");
+  const [expiry, setExpiry] = useState("");
+  const [cvv, setCvv] = useState("");
+  const [phoneSbp, setPhoneSbp] = useState("+7 ");
+  const [submitted, setSubmitted] = useState(false);
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    onPaid?.();
+    setSubmitted(true);
+  };
+
+  if (submitted) {
+    return (
+      <div>
+        <p className="text-slate-600">Оплата прошла успешно (демо). Карточка записи обновлена до перезагрузки страницы; после обновления снова покажутся исходные данные из моков.</p>
+        <Button className="mt-5 w-full sm:w-auto" onClick={onClose}>Закрыть</Button>
+      </div>
+    );
+  }
+
+  return (
+    <form className="space-y-4" onSubmit={handleSubmit}>
+      <div className="rounded-2xl border border-orange-100 bg-orange-50/80 p-4 text-sm text-slate-700">
+        <p className="font-semibold text-cocoa">{service?.title ?? "Услуга"}</p>
+        <p className="mt-1">{appointment.pet} · {appointment.date}, {appointment.time}</p>
+        <p className="mt-2 text-lg font-black text-cocoa">{money(appointment.amount)}</p>
+      </div>
+      <p className="text-xs text-slate-500">Учебная форма: реальные платежи не выполняются.</p>
+      <Field label="Способ оплаты">
+        <Select value={method} onChange={(event) => setMethod(event.target.value)}>
+          <option value="card">Банковская карта</option>
+          <option value="sbp">СБП</option>
+        </Select>
+      </Field>
+      {method === "card" ? (
+        <>
+          <Field label="Номер карты">
+            <Input inputMode="numeric" autoComplete="cc-number" placeholder="0000 0000 0000 0000" maxLength={19} value={cardNumber} onChange={(event) => setCardNumber(event.target.value)} />
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Срок (ММ/ГГ)">
+              <Input placeholder="ММ/ГГ" maxLength={5} value={expiry} onChange={(event) => setExpiry(event.target.value)} />
+            </Field>
+            <Field label="CVC/CVV">
+              <Input inputMode="numeric" type="password" placeholder="•••" maxLength={4} value={cvv} onChange={(event) => setCvv(event.target.value)} />
+            </Field>
+          </div>
+        </>
+      ) : (
+        <Field label="Телефон, привязанный к СБП">
+          <Input type="tel" value={phoneSbp} onChange={(event) => setPhoneSbp(event.target.value)} placeholder="+7 900 000-00-00" />
+        </Field>
+      )}
+      <div className="flex flex-wrap gap-3 pt-2">
+        <Button type="button" variant="secondary" onClick={onClose}>Отмена</Button>
+        <Button type="submit">Оплатить</Button>
+      </div>
+    </form>
+  );
+}
+
+function AppointmentRecordActions({ item, onOpenPay, onOpenInfo }) {
+  return (
+    <div className="flex flex-wrap gap-2 border-t border-orange-100 pt-4">
+      {appointmentCanPay(item) ? (
+        <Button type="button" onClick={() => onOpenPay(item)}>Оплатить</Button>
+      ) : null}
+      <Button variant="secondary" type="button" onClick={() => routeTo("booking")}>Повторить</Button>
+      <Button variant="secondary" type="button" onClick={() => onOpenInfo("Перенос записи")}>Перенести</Button>
+      <Button variant="secondary" type="button" onClick={() => onOpenInfo("Отмена записи")}>Отменить</Button>
+    </div>
+  );
+}
+
+function AccountPage({ demoPaidById, markDemoPaid }) {
+  const [modal, setModal] = useState(null);
   const currentAppointments = appointments.filter((item) => currentAppointmentStatuses.includes(item.status));
 
   return (
@@ -429,16 +538,52 @@ function AccountPage() {
         </Card>
         <div className="space-y-8">
           <Section title="Питомцы"><Grid>{pets.map((pet) => <PetCard key={pet.id} pet={pet} />)}</Grid></Section>
-          <Section title="Записи"><div className="grid gap-4">{currentAppointments.map((item) => <AppointmentCard key={item.id} item={item} compact />)}</div></Section>
+          <Section title="Записи">
+            <div className="grid gap-4">
+              {currentAppointments.map((item) => {
+                const merged = mergeDemoPaid(item, demoPaidById);
+                return (
+                  <AppointmentCard
+                    key={item.id}
+                    item={merged}
+                    compact
+                    footer={
+                      <AppointmentRecordActions
+                        item={merged}
+                        onOpenPay={(entry) => setModal({ kind: "pay", appointment: entry })}
+                        onOpenInfo={(title) => setModal({ kind: "info", title })}
+                      />
+                    }
+                  />
+                );
+              })}
+            </div>
+          </Section>
         </div>
       </div>
+      {modal?.kind === "info" && (
+        <Modal title={modal.title} onClose={() => setModal(null)}>
+          <p className="text-slate-600">Mock-модальное окно. В реальной версии здесь будет выбор новой даты или подтверждение отмены.</p>
+          <Button className="mt-5" onClick={() => setModal(null)}>Готово</Button>
+        </Modal>
+      )}
+      {modal?.kind === "pay" && (
+        <Modal wide title="Оплата записи" onClose={() => setModal(null)}>
+          <PaymentModalForm
+            appointment={modal.appointment}
+            onClose={() => setModal(null)}
+            onPaid={() => markDemoPaid(modal.appointment.id)}
+          />
+        </Modal>
+      )}
     </PageTitle>
   );
 }
 
-function AppointmentsPage() {
+function AppointmentsPage({ demoPaidById, markDemoPaid }) {
   const [modal, setModal] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+
   const currentAppointments = appointments.filter((item) => currentAppointmentStatuses.includes(item.status));
 
   useEffect(() => {
@@ -447,7 +592,7 @@ function AppointmentsPage() {
   }, []);
 
   return (
-    <PageTitle title="Мои записи" subtitle="Текущие записи и быстрые действия по ним.">
+    <PageTitle title="Мои записи" subtitle="Активные записи: подтверждённые, ожидающие и оплаченные. История отменённых и завершённых — в будущей версии или через поддержку.">
       <div className="grid gap-4">
         {isLoading ? (
           <Card className="animate-pulse">
@@ -455,22 +600,38 @@ function AppointmentsPage() {
             <p className="mt-2 text-sm text-slate-500">Проверяем актуальные бронирования.</p>
           </Card>
         ) : (
-          currentAppointments.map((item) => (
-            <Card key={item.id}>
-              <AppointmentCard item={item} compact />
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Button variant="secondary" onClick={() => routeTo("booking")}>Повторить</Button>
-                <Button variant="secondary" onClick={() => setModal("Перенос записи")}>Перенести</Button>
-                <Button variant="secondary" onClick={() => setModal("Отмена записи")}>Отменить</Button>
-              </div>
-            </Card>
-          ))
+          currentAppointments.map((item) => {
+            const merged = mergeDemoPaid(item, demoPaidById);
+            return (
+              <AppointmentCard
+                key={item.id}
+                item={merged}
+                compact
+                footer={
+                  <AppointmentRecordActions
+                    item={merged}
+                    onOpenPay={(entry) => setModal({ kind: "pay", appointment: entry })}
+                    onOpenInfo={(title) => setModal({ kind: "info", title })}
+                  />
+                }
+              />
+            );
+          })
         )}
       </div>
-      {modal && (
-        <Modal title={modal} onClose={() => setModal(null)}>
+      {modal?.kind === "info" && (
+        <Modal title={modal.title} onClose={() => setModal(null)}>
           <p className="text-slate-600">Mock-модальное окно. В реальной версии здесь будет выбор новой даты или подтверждение отмены.</p>
           <Button className="mt-5" onClick={() => setModal(null)}>Готово</Button>
+        </Modal>
+      )}
+      {modal?.kind === "pay" && (
+        <Modal wide title="Оплата записи" onClose={() => setModal(null)}>
+          <PaymentModalForm
+            appointment={modal.appointment}
+            onClose={() => setModal(null)}
+            onPaid={() => markDemoPaid(modal.appointment.id)}
+          />
         </Modal>
       )}
     </PageTitle>
@@ -516,6 +677,10 @@ function PageTitle({ title, subtitle, children }) {
 
 export default function App() {
   const [hash, setHash] = useState(window.location.hash.replace("#", ""));
+  const [demoPaidById, setDemoPaidById] = useState({});
+  const markDemoPaid = useCallback((appointmentId) => {
+    setDemoPaidById((prev) => ({ ...prev, [appointmentId]: true }));
+  }, []);
 
   useEffect(() => {
     const onHashChange = () => setHash(window.location.hash.replace("#", ""));
@@ -529,8 +694,8 @@ export default function App() {
     services: <ServicesPage />,
     booking: <BookingPage />,
     pet: <PetProfilePage />,
-    account: <AccountPage />,
-    appointments: <AppointmentsPage />,
+    account: <AccountPage demoPaidById={demoPaidById} markDemoPaid={markDemoPaid} />,
+    appointments: <AppointmentsPage demoPaidById={demoPaidById} markDemoPaid={markDemoPaid} />,
     contacts: <ContactsPage />,
   }[page] || <HomePage />;
 
