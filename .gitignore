@@ -1,4 +1,23 @@
-node_modules
-dist
-.env
-.env.local
+# Корень монорепо (npm-скрипты dev / setup)
+node_modules/
+
+# Frontend (Vite / React)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Frontend env (Vite префикс VITE_ — по необходимости добавьте frontend/.env*.local)
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# Backend (Python / FastAPI)
+backend/.venv/
+backend/.env
+
+# Python (в любом каталоге репозитория)
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python

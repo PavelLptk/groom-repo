@@ -1,23 +1,24 @@
 {
-  "name": "groom-booking-v1",
+  "name": "groom-care",
   "private": true,
-  "version": "0.1.0",
-  "type": "module",
+  "description": "GroomCare — монорепозиторий (FastAPI + Vite)",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "react": "latest",
-    "react-dom": "latest"
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:web": "npm run dev --prefix frontend",
+    "dev:api": "run-script-os",
+    "dev:api:darwin": "cd backend && .venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8010",
+    "dev:api:linux": "cd backend && .venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8010",
+    "dev:api:win32": "cd backend && .venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8010",
+    "dev:api:default": "cd backend && .venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8010",
+    "setup": "npm install && npm run setup:backend && npm install --prefix frontend",
+    "setup:backend": "run-script-os",
+    "setup:backend:darwin": "cd backend && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt",
+    "setup:backend:linux": "cd backend && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt",
+    "setup:backend:win32": "cd backend && python -m venv .venv && .venv\\Scripts\\python.exe -m pip install -r requirements.txt",
+    "setup:backend:default": "cd backend && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "latest",
-    "tailwindcss": "latest",
-    "postcss": "latest",
-    "autoprefixer": "latest"
+    "concurrently": "^9.1.2",
+    "run-script-os": "^1.1.6"
   }
 }
